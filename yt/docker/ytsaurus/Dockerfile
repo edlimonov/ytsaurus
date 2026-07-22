@@ -178,11 +178,13 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install -y \
   openjdk-11-jdk \
   openjdk-17-jdk \
+  openjdk-21-jdk \
   java-common
 
 RUN HOST_ARCH=$(dpkg --print-architecture) \
   && ln -s /usr/lib/jvm/java-11-openjdk-${HOST_ARCH} /opt/jdk11 \
   && ln -s /usr/lib/jvm/java-17-openjdk-${HOST_ARCH} /opt/jdk17 \
+  && ln -s /usr/lib/jvm/java-21-openjdk-${HOST_ARCH} /opt/jdk21 \
   && update-java-alternatives --set java-1.11.0-openjdk-${HOST_ARCH}
 
 ##########################################################################################
@@ -251,11 +253,13 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install 
   containerd \
   openjdk-11-jdk \
   openjdk-17-jdk \
+  openjdk-21-jdk \
   java-common
 
 RUN HOST_ARCH=$(dpkg --print-architecture) \
   && ln -s /usr/lib/jvm/java-11-openjdk-${HOST_ARCH} /opt/jdk11 \
   && ln -s /usr/lib/jvm/java-17-openjdk-${HOST_ARCH} /opt/jdk17 \
+  && ln -s /usr/lib/jvm/java-21-openjdk-${HOST_ARCH} /opt/jdk21 \
   && update-java-alternatives --set java-1.11.0-openjdk-${HOST_ARCH}
 
 # Default python to be used by python3 jobs, for compatibility with jupyter tutorial.
@@ -389,6 +393,10 @@ COPY ./mrjob /usr/bin/mrjob
 COPY ./dq_vanilla_job /usr/bin/dq_vanilla_job
 COPY ./dq_vanilla_job.lite /usr/bin/dq_vanilla_job.lite
 COPY ./yql /usr/lib/yql
+
+RUN ln -s /usr/lib/yql/liblibidn-dynamic.so /usr/bin/liblibidn-dynamic.so
+RUN ln -s /usr/lib/yql/libiconv.so /usr/bin/libiconv.so
+RUN ln -s /usr/lib/yql/liblibaio-dynamic.so /usr/bin/liblibaio-dynamic.so
 
 # Scripts for init jobs.
 COPY ./init_query_tracker_state /usr/bin/init_query_tracker_state

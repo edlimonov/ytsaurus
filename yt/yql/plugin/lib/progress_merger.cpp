@@ -90,7 +90,7 @@ void TProgressMerger::MergeWith(const NYql::TOperationProgress& progress)
     HasChanges_ = true;
 }
 
-void TProgressMerger::MergeWith(const NYql::NProto::TTaskProgress& taskProgress)
+void TProgressMerger::MergeWith(const NYql::NProto::TTaskProgress& taskProgress, uint32_t revision)
 {
     for (const auto& node : taskProgress.GetNodes()) {
         auto in = NodesMap_.emplace(node.GetId(), TNodeProgress(node));
@@ -99,14 +99,18 @@ void TProgressMerger::MergeWith(const NYql::NProto::TTaskProgress& taskProgress)
             if (in.first->second.HasStages()) {
                 YT_VERIFY(
                     node.StagesSize() > 0,
-                    Format("Node %v has empty stages. Full TaskProgress dump: %v. Current progress: %v",
+                    Format("Node %v has empty stages. Full TaskProgress dump: %v. Current progress: %v. Last revision: %v. Current revision: %v",
                         node.GetId(),
                         taskProgress.DebugString(),
-                        ToYsonString()));
+                        ToYsonString(),
+                        LastRevision_,
+                        revision));
             }
 
             changed |= in.first->second.MergeWith(node);
         }
+
+        LastRevision_ = revision;
         HasChanges_ |= changed;
     }
 }

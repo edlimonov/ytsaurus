@@ -3,7 +3,7 @@ LIBRARY()
 INCLUDE(${ARCADIA_ROOT}/yt/ya_cpp.make.inc)
 
 SRCS(
-    block_device.cpp
+    block_device_detail.cpp
     config.cpp
     chunk_block_device.cpp
     chunk_handler.cpp
@@ -11,6 +11,7 @@ SRCS(
     file_system_block_device.cpp
     image_reader.cpp
     memory_block_device.cpp
+    page_cache.cpp
     profiler.cpp
     random_access_file_reader.cpp
     server.cpp

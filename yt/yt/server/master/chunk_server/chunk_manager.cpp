@@ -423,6 +423,7 @@ public:
         RegisterMethod(BIND_NO_PROPAGATE(&TChunkManager::HydraUnstageExpiredChunks, Unretained(this)));
         RegisterMethod(BIND_NO_PROPAGATE(&TChunkManager::HydraRedistributeConsistentReplicaPlacementTokens, Unretained(this)));
         RegisterMethod(BIND_NO_PROPAGATE(&TChunkManager::HydraTopUpSequoiaChunkPurgatory, Unretained(this)));
+        RegisterMethod(BIND_NO_PROPAGATE(&TChunkManager::HydraScheduleMultipleChunkSeals, Unretained(this)));
 
         RegisterLoader(
             "ChunkManager.Keys",
@@ -786,6 +787,16 @@ public:
             this);
     }
 
+    std::unique_ptr<TMutation> CreateScheduleMultipleChunkSealsMutation(
+        const NProto::TReqScheduleMultipleChunkSeals& request) override
+    {
+        return CreateMutation(
+            Bootstrap_->GetHydraFacade()->GetHydraManager(),
+            request,
+            &TChunkManager::HydraScheduleMultipleChunkSeals,
+            this);
+    }
+
     TNodeList AllocateWriteTargets(
         TDomesticMedium* medium,
         TChunk* chunk,
@@ -891,6 +902,28 @@ public:
 
         for (auto replica : replicas) {
             auto nodeId = replica.GetNodeId();
+
+            // Offshore replicas are confirmed via OffshoreNodeId sentinel — no real node.
+            if (nodeId == NNodeTrackerClient::OffshoreNodeId) {
+                auto mediumIndex = replica.GetMediumIndex();
+                const auto* medium = GetMediumByIndexOrThrow(mediumIndex);
+                if (!medium->IsOffshore()) {
+                    YT_LOG_ALERT(
+                        "Confirmed offshore replica references non-offshore medium "
+                        "(ChunkId: %v, MediumName: %v, MediumIndex: %v)",
+                        chunk->GetId(),
+                        medium->GetName(),
+                        mediumIndex);
+                    continue;
+                }
+                TAugmentedStoredChunkReplicaPtr storedReplica(
+                    const_cast<TMedium*>(medium),
+                    replica.GetReplicaIndex());
+                chunk->AddReplica(storedReplica, medium, /*approved*/ true);
+                ScheduleChunkRefresh(chunk);
+                continue;
+            }
+
             auto* node = nodeTracker->FindNode(nodeId);
             if (!IsObjectAlive(node)) {
                 YT_LOG_DEBUG("Tried to confirm chunk at an unknown node (ChunkId: %v, NodeId: %v)",
@@ -2337,6 +2370,10 @@ public:
         std::optional<int> hintIndex,
         TObjectId hintId) override
     {
+        if (!GetDynamicConfig()->AllowOffshoreMedia) {
+            THROW_ERROR_EXCEPTION("Offshore media creation is not allowed");
+        }
+
         CreateMediumPrologue(name);
 
         auto objectManager = Bootstrap_->GetObjectManager();
@@ -4151,7 +4188,8 @@ private:
 
     TFuture<void> ModifySequoiaReplicas(
         ESequoiaTransactionType transactionType,
-        std::unique_ptr<TReqModifyReplicas> request) override
+        std::unique_ptr<TReqModifyReplicas> request,
+        bool allowBatching) override
     {
         YT_ASSERT_THREAD_AFFINITY(AutomatonThread);
 
@@ -4166,7 +4204,8 @@ private:
             transactionType);
 
         const auto& config = GetDynamicConfig();
-        if (transactionType == ESequoiaTransactionType::IncrementalHeartbeat &&
+        if (allowBatching &&
+            transactionType == ESequoiaTransactionType::IncrementalHeartbeat &&
             config->SequoiaChunkReplicas->BatchIncrementalHeartbeat)
         {
             try {
@@ -4349,7 +4388,7 @@ private:
 
         const auto& sequoiaChunkReplicasConfig = GetDynamicConfig()->SequoiaChunkReplicas;
         for (const auto& replica : location->Replicas()) {
-            const auto* chunk = replica.GetPtr();
+            auto* chunk = replica.GetPtr();
             auto chunkSequoiaConfig = GetChunkSequoiaConfig(chunk->GetId(), sequoiaChunkReplicasConfig);
             if (chunkSequoiaConfig.StoreInSequoia) {
                 if (chunkSequoiaConfig.StoreSequoiaReplicasOnMaster) {
@@ -4371,6 +4410,9 @@ private:
                 TChunkIdWithIndexAndState(chunk->GetId(), replica.GetReplicaIndex(), replica.GetReplicaState())))
             {
                 replicasToRemove.emplace_back(replica);
+            } else {
+                ScheduleChunkRefresh(chunk);
+                ScheduleChunkSeal(chunk);
             }
         }
 
@@ -4379,6 +4421,12 @@ private:
         }
 
         location->SetState(EChunkLocationState::Online);
+
+        if (sequoiaChunkReplicasConfig->Enable) {
+            // After sequoia location replacement we schedule refresh for all changed Sequoia replicas.
+            // But unchanged Sequoia replicas are not refreshed, so we need to refresh location after it becomes online.
+            ChunkReplicator_->ScheduleLocationRefreshSequoia(location);
+        }
 
         return announceReplicaRequests;
     }
@@ -6842,6 +6890,17 @@ private:
         for (const auto& protoChunkId : request->chunk_ids()) {
             auto chunkId = FromProto<TChunkId>(protoChunkId);
             ++SequoiaChunkPurgatory_[chunkId];
+        }
+    }
+
+    void HydraScheduleMultipleChunkSeals(NProto::TReqScheduleMultipleChunkSeals* request)
+    {
+        for (const auto& protoChunkId : request->chunk_ids()) {
+            auto chunkId = FromProto<TChunkId>(protoChunkId);
+            auto* chunk = FindChunk(chunkId);
+            if (IsObjectAlive(chunk)) {
+                ScheduleChunkSeal(chunk);
+            }
         }
     }
 

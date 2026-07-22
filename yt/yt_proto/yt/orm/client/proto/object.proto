@@ -850,8 +850,8 @@ message TReferencesOption
         optional TReferenceOption.EDuplicatePolicy duplicate_policy = 26;
     }
 
-    optional TEndpoint first = 1;
-    optional TEndpoint second = 2;
+    optional TEndpoint left = 1;
+    optional TEndpoint right = 2;
     optional TReferenceOption.EReferenceMode mode = 3;
 }
 
@@ -888,18 +888,10 @@ message TJoinOption
     optional bool async = 4;
 }
 
-enum EFilterPlace
-{
-    FILTER_WHERE = 0;
-    FILTER_HAVING = 1;
-    FILTER_JOIN_PREDICATE = 2;
-}
-
 message TJoinedColumnOption
 {
-    reserved 1;
-    reserved "select_allowed";
-    optional EFilterPlace filter_place = 2;
+    reserved 1, 2;
+    reserved "select_allowed", "filter_place";
     // Field evaluation expression. Mutually exclusive with name and aggregation.
     optional string expression = 3;
     // Column name.

@@ -18,8 +18,45 @@ DEFINE_ENUM_UNKNOWN_VALUE(EFilesystemType, Unknown);
 
 ////////////////////////////////////////////////////////////////////////////////
 
-struct TChunkBlockDeviceConfig
+struct TBlockDeviceConfigBase
     : public NYTree::TYsonStruct
+{
+    REGISTER_YSON_STRUCT(TBlockDeviceConfigBase);
+
+    static void Register(TRegistrar registrar);
+};
+
+DEFINE_REFCOUNTED_TYPE(TBlockDeviceConfigBase)
+
+////////////////////////////////////////////////////////////////////////////////
+
+//! Configuration for the write-back page cache of TChunkBlockDevice.
+struct TPageCacheConfig
+    : public NYTree::TYsonStruct
+{
+    //! Page size in bytes.
+    //! Must be a positive multiple of 4096.
+    i64 PageSize;
+
+    //! Total size of the page cache in bytes.
+    //! Must be a positive multiple of PageSize.
+    i64 Size;
+
+    //! Period for background flush of dirty pages.
+    //! When not set (nullopt), periodic flush is disabled.
+    std::optional<TDuration> FlushPeriod;
+
+    REGISTER_YSON_STRUCT(TPageCacheConfig);
+
+    static void Register(TRegistrar registrar);
+};
+
+DEFINE_REFCOUNTED_TYPE(TPageCacheConfig)
+
+////////////////////////////////////////////////////////////////////////////////
+
+struct TChunkBlockDeviceConfig
+    : public TBlockDeviceConfigBase
 {
     i64 Size;
     int MediumIndex;
@@ -31,6 +68,10 @@ struct TChunkBlockDeviceConfig
     //! Number of TCP connections to use for NBD RPC requests.
     int MultiplexingParallelism;
 
+    //! Write-back page cache configuration.
+    //! When null, page cache is disabled.
+    TPageCacheConfigPtr PageCache;
+
     REGISTER_YSON_STRUCT(TChunkBlockDeviceConfig);
 
     static void Register(TRegistrar registrar);
@@ -41,7 +82,7 @@ DEFINE_REFCOUNTED_TYPE(TChunkBlockDeviceConfig)
 ////////////////////////////////////////////////////////////////////////////////
 
 struct TFileSystemBlockDeviceConfig
-    : public NYTree::TYsonStruct
+    : public TBlockDeviceConfigBase
 {
     REGISTER_YSON_STRUCT(TFileSystemBlockDeviceConfig);
 
@@ -53,7 +94,7 @@ DEFINE_REFCOUNTED_TYPE(TFileSystemBlockDeviceConfig)
 ////////////////////////////////////////////////////////////////////////////////
 
 struct TMemoryBlockDeviceConfig
-    : public NYTree::TYsonStruct
+    : public TBlockDeviceConfigBase
 {
     i64 Size;
 
@@ -67,7 +108,7 @@ DEFINE_REFCOUNTED_TYPE(TMemoryBlockDeviceConfig)
 ////////////////////////////////////////////////////////////////////////////////
 
 struct TDynamicTableBlockDeviceConfig
-    : public NYTree::TYsonStruct
+    : public TBlockDeviceConfigBase
 {
     i64 Size;
     i64 BlockSize;

@@ -247,6 +247,16 @@ public:
         StrongOrderingManager_.OnProfiling(buffer);
     }
 
+    void SetArtificialParticipantCommitDelay(TDuration delay) override
+    {
+        auto oldDelay = ArtificialParticipantCommitDelay_.exchange(delay, std::memory_order::relaxed);
+        YT_LOG_DEBUG_IF(
+            delay != oldDelay,
+            "Artificial participant commit delay changed (OldDelay: %v, NewDelay: %v)",
+            oldDelay,
+            delay);
+    }
+
     TFuture<void> GetReadyToEnterReadOnlyMode() override
     {
         return StrongOrderingManager_.WaitUntilPreparedCommitsFinish();
@@ -264,6 +274,9 @@ private:
     const IAuthenticatorPtr Authenticator_;
 
     const NLogging::TLogger Logger;
+
+    // For testing purposes.
+    std::atomic<TDuration> ArtificialParticipantCommitDelay_ = TDuration::Zero();
 
     DECLARE_THREAD_AFFINITY_SLOT(AutomatonThread);
 
@@ -303,7 +316,8 @@ private:
 
         ~TWrappedParticipant()
         {
-            // ProbationExecutor_ owns this instance via MakeWeak
+            // ProbationExecutor_ has weak reference to this instance,
+            // so stop it to prevent callback being fired after this instance destruction.
             YT_UNUSED_FUTURE(ProbationExecutor_->Stop());
         }
 
@@ -332,8 +346,10 @@ private:
             if (GetState() == ETransactionParticipantState::Unregistered) {
                 return true;
             }
-            if (LastTouched_ + ParticipantTtl < NProfiling::GetInstant() && PendingSenders_.empty()) {
-                return true;
+
+            if (LastTouched_ + ParticipantTtl < NProfiling::GetInstant()) {
+                auto guard = Guard(SpinLock_);
+                return PendingSenders_.empty();
             }
             return false;
         }
@@ -679,7 +695,7 @@ private:
                 return;
             }
 
-            YT_LOG_DEBUG("Checking participant availablitity");
+            YT_LOG_DEBUG("Checking participant availability");
             underlying->CheckAvailability().Subscribe(
                 BIND(&TWrappedParticipant::OnAvailabilityCheckResult, MakeWeak(this)));
         }
@@ -910,7 +926,7 @@ private:
             // order strongly ordered transactions are updated at the same time or before the master is.
             if (stronglyOrdered) {
                 YT_LOG_ALERT_IF(strongOrderingTags.empty(),
-                    "Transaction strong ordering mismatch detacted (TransactionId: %v, StronglyOrdered: %v, StrongOrderingTags: %v)",
+                    "Transaction strong ordering mismatch detected (TransactionId: %v, StronglyOrdered: %v, StrongOrderingTags: %v)",
                     transactionId,
                     stronglyOrdered,
                     strongOrderingTags);
@@ -1193,6 +1209,15 @@ private:
             NRpc::WriteAuthenticationIdentityToProto(&hydraRequest, NRpc::GetCurrentAuthenticationIdentity());
 
             auto owner = GetOwnerOrThrow();
+
+            auto commitDelay = owner->ArtificialParticipantCommitDelay_.load(std::memory_order::relaxed);
+            if (commitDelay != TDuration::Zero()) {
+                YT_LOG_DEBUG("Waiting for artificial delay before transaction commit on participant (TransactionId: %v, Delay: %v)",
+                    transactionId,
+                    commitDelay);
+                TDelayedExecutor::WaitForDuration(commitDelay);
+            }
+
             auto mutation = CreateMutation(owner->HydraManager_, hydraRequest);
             mutation->SetCurrentTraceContext();
             YT_UNUSED_FUTURE(mutation->CommitAndReply(context));
@@ -1335,7 +1360,7 @@ private:
         }
 
     private:
-        TWeakPtr<TTransactionSupervisor> Owner_;
+        const TWeakPtr<TTransactionSupervisor> Owner_;
     };
 
     const IYPathServicePtr OrchidService_;
@@ -1477,7 +1502,7 @@ private:
         // 1) only active Sequoia transactions leads to stuck requests in
         //    read-only mode;
         // 2) read-only mode for tablet cell Hydra is unlikely to be used;
-        // 3) transaction supervisor knows only aboud a part of 2PC: it knows
+        // 3) transaction supervisor knows only about a part of 2PC: it knows
         //    nothing about foreign transactions. Therefore, to properly wait
         //    all 2PC in tablet cells would require some changes in tablet node
         //    transaction manager and it is not what we want to touch.
@@ -1551,6 +1576,8 @@ private:
                     return;
                 }
 
+                // Best effort to reduce duration of transient locks for
+                // transaction which will be unlikely to be committed.
                 SetCommitFailed(commit, errorOrResponse);
                 RemoveTransientCommit(commit);
             }).Via(EpochAutomatonInvoker_));
@@ -1796,15 +1823,16 @@ private:
                 maxAllowedCommitTimestamp,
                 identity);
         } catch (const std::exception& ex) {
-            if (auto commit = FindCommit(transactionId)) {
-                YT_VERIFY(!commit->GetPersistent());
-                SetCommitFailed(commit, ex);
-                RemoveTransientCommit(commit);
+            if (auto* existingCommit = FindCommit(transactionId)) {
+                YT_VERIFY(!existingCommit->GetPersistent());
+                SetCommitFailed(existingCommit, ex);
+                RemoveTransientCommit(existingCommit);
             }
+
             THROW_ERROR WrapHydraError(ex);
         }
 
-        if (commit && commit->GetPersistentState() != ECommitState::Start) {
+        if (commit->GetPersistentState() != ECommitState::Start) {
             YT_LOG_DEBUG(
                 "Requested to commit distributed transaction in wrong state; ignored (TransactionId: %v, State: %v)",
                 transactionId,
@@ -2255,7 +2283,7 @@ private:
                 StrongOrderingManager_.GetClockSourceClusterTag());
 
             YT_LOG_DEBUG("Committing strongly ordered transaction at participant (TransactionId: %v)",
-                    transactionId);
+                transactionId);
 
             auto transactionsToCommit = StrongOrderingManager_.OnCommitCommit(
                 transactionId,

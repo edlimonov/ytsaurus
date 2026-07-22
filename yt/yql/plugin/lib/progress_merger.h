@@ -26,7 +26,7 @@ public:
 class TProgressMerger : public NYql::NProgressMerger::ITaskProgressMerger {
 public:
     void MergeWith(const NYql::TOperationProgress& progress) override;
-    void MergeWith(const NYql::NProto::TTaskProgress& taskProgress);
+    void MergeWith(const NYql::NProto::TTaskProgress& taskProgress, uint32_t revision = 0);
     void AbortAllUnfinishedNodes() override;
 
     bool HasChangesSinceLastFlush() const;
@@ -34,6 +34,7 @@ public:
 
 private:
     bool HasChanges_ = false;
+    uint32_t LastRevision_ = 0;
     THashMap<ui32, TNodeProgress> NodesMap_;
 };
 

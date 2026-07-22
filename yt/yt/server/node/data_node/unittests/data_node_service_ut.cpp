@@ -458,6 +458,7 @@ public:
         bool UseProbePutBlocks = false;
         bool SkipWriteThrottlingLocations = false;
         bool AlwaysThrottleLocation = false;
+        bool EnableWriteThrottlingWritableCheck = false;
         bool PreallocateDiskSpace = false;
         bool UseDirectIO = false;
         bool WaitPrecedingBlocksReceived = true;
@@ -628,6 +629,7 @@ public:
         DataNodeService_ = CreateDataNodeService(DataNodeBootstrap_->GetConfig()->DataNode, DataNodeBootstrap_.Get());
         DataNodeBootstrap_->GetDynamicConfigManager()->GetConfig()->DataNode->UseProbePutBlocks = TestParams_.UseProbePutBlocks;
         DataNodeBootstrap_->GetDynamicConfigManager()->GetConfig()->DataNode->TestingOptions->AlwaysThrottleLocation = TestParams_.AlwaysThrottleLocation;
+        DataNodeBootstrap_->GetDynamicConfigManager()->GetConfig()->DataNode->EnableWriteThrottlingWritableCheck = TestParams_.EnableWriteThrottlingWritableCheck;
         DataNodeBootstrap_->GetDynamicConfigManager()->GetConfig()->DataNode->TestingOptions->DelayBeforePerformPutBlocks = TestParams_.DelayBeforePerformPutBlocks;
         DataNodeBootstrap_->GetDynamicConfigManager()->GetConfig()->DataNode->PreallocateDiskSpace = TestParams_.PreallocateDiskSpace;
         DataNodeBootstrap_->GetDynamicConfigManager()->GetConfig()->DataNode->UseDirectIO = TestParams_.UseDirectIO;
@@ -1428,6 +1430,88 @@ INSTANTIATE_TEST_SUITE_P(
     )
 );
 
+////////////////////////////////////////////////////////////////////////////////
+
+struct TWriteThrottlingWritableCheckTestCase
+{
+    std::vector<double> IOWeights = {1., 1.};
+    std::vector<int> SessionCountLimits = {128, 128};
+    bool AlwaysThrottleLocation = false;
+    bool EnableWriteThrottlingWritableCheck = false;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+
+class TWriteThrottlingWritableCheckTest
+    : public TDataNodeTest
+    , public ::testing::WithParamInterface<TWriteThrottlingWritableCheckTestCase>
+{
+public:
+    TWriteThrottlingWritableCheckTest()
+        : TDataNodeTest(
+            TDataNodeTest::TDataNodeTestParams {
+                .ReadThreadCount = 4,
+                .WriteThreadCount = 4,
+                .ChooseLocationBasedOnIOWeight = true,
+                .IOWeights = GetParam().IOWeights,
+                .SessionCountLimits = GetParam().SessionCountLimits,
+                .AlwaysThrottleLocation = GetParam().AlwaysThrottleLocation,
+                .EnableWriteThrottlingWritableCheck = GetParam().EnableWriteThrottlingWritableCheck,
+            })
+    { }
+};
+
+////////////////////////////////////////////////////////////////////////////////
+
+TEST_P(TWriteThrottlingWritableCheckTest, IOWeightZeroWhenThrottlingCheckEnabled)
+{
+    const auto& locations = GetDataNodeBootstrap()->GetChunkStore()->Locations();
+    auto alwaysThrottle = GetParam().AlwaysThrottleLocation;
+    auto enableCheck = GetParam().EnableWriteThrottlingWritableCheck;
+
+    for (const auto& location : locations) {
+        double ioWeight = location->GetIOWeight();
+        if (alwaysThrottle && enableCheck) {
+            EXPECT_EQ(ioWeight, 0.0);
+        } else {
+            EXPECT_GT(ioWeight, 0.0);
+        }
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    TWriteThrottlingWritableCheckTest,
+    TWriteThrottlingWritableCheckTest,
+    ::testing::Values(
+        TWriteThrottlingWritableCheckTestCase{
+            .IOWeights = {1, 1, 1, 1, 1},
+            .SessionCountLimits = {128, 128, 128, 128, 128},
+            .AlwaysThrottleLocation = true,
+            .EnableWriteThrottlingWritableCheck = true,
+        },
+        TWriteThrottlingWritableCheckTestCase{
+            .IOWeights = {1, 1, 1, 1, 1},
+            .SessionCountLimits = {128, 128, 128, 128, 128},
+            .AlwaysThrottleLocation = true,
+            .EnableWriteThrottlingWritableCheck = false,
+        },
+        TWriteThrottlingWritableCheckTestCase{
+            .IOWeights = {1, 1, 1, 1, 1},
+            .SessionCountLimits = {128, 128, 128, 128, 128},
+            .AlwaysThrottleLocation = false,
+            .EnableWriteThrottlingWritableCheck = true,
+        },
+        TWriteThrottlingWritableCheckTestCase{
+            .IOWeights = {1, 1, 1, 1, 1},
+            .SessionCountLimits = {128, 128, 128, 128, 128},
+            .AlwaysThrottleLocation = false,
+            .EnableWriteThrottlingWritableCheck = false,
+        }
+    )
+);
+
+////////////////////////////////////////////////////////////////////////////////
+
 TEST_P(TIOWeightTest, IoBasedOnIoWeight)
 {
     auto& ioWeights = GetParam().IOWeights;
@@ -1864,6 +1948,57 @@ INSTANTIATE_TEST_SUITE_P(
     TWriteTest,
     ::testing::ValuesIn(GenerateWriteTestParams())
 );
+
+////////////////////////////////////////////////////////////////////////////////
+
+class TJournalSessionTest
+    : public TDataNodeTest
+{ };
+
+TEST_F(TJournalSessionTest, PutBlocksDuplicatesAndGaps)
+{
+    TSessionId sessionId(MakeRandomId(EObjectType::JournalChunk, TCellTag(0xf003)), GenericMediumIndex);
+    WaitFor(StartChunk(sessionId, /*useProbePutBlocks*/ false, /*preallocateDiskSpace*/ false, /*useDirectIo*/ false))
+        .ThrowOnError();
+
+    TRandomGenerator generator(42);
+    auto records = CreateBlocks(/*count*/ 5, /*blockSize*/ 10, generator);
+    auto cumulativeBlockSize = CalculateCummulativeBlockSize(records);
+
+    WaitFor(PutBlocks(sessionId, records, /*firstBlockIndex*/ 0, cumulativeBlockSize).AsVoid())
+        .ThrowOnError();
+    WaitFor(FlushBlocks(sessionId, /*blockIndex*/ 4))
+        .ThrowOnError();
+
+    // A request starting past the changelog end is rejected with a dedicated
+    // error code.
+    auto gapResult = WaitFor(PutBlocks(sessionId, records, /*firstBlockIndex*/ 7, cumulativeBlockSize).AsVoid());
+    EXPECT_FALSE(gapResult.IsOK());
+    EXPECT_TRUE(gapResult.FindMatching(NChunkClient::EErrorCode::MissingJournalChunkRecord))
+        << ToString(gapResult);
+
+    // A duplicate ending exactly at the changelog end is skipped.
+    auto exactDuplicateResult = WaitFor(PutBlocks(sessionId, records, /*firstBlockIndex*/ 0, cumulativeBlockSize).AsVoid());
+    EXPECT_TRUE(exactDuplicateResult.IsOK())
+        << ToString(exactDuplicateResult);
+
+    // A stale duplicate ending strictly before the changelog end must be
+    // skipped as well.
+    std::vector<TBlock> stalePrefix(records.begin(), records.begin() + 3);
+    auto staleDuplicateResult = WaitFor(PutBlocks(sessionId, stalePrefix, /*firstBlockIndex*/ 0, cumulativeBlockSize).AsVoid());
+    EXPECT_TRUE(staleDuplicateResult.IsOK())
+        << ToString(staleDuplicateResult);
+
+    // The session remains usable afterwards.
+    auto tailRecords = CreateBlocks(/*count*/ 3, /*blockSize*/ 10, generator);
+    WaitFor(PutBlocks(sessionId, tailRecords, /*firstBlockIndex*/ 5, cumulativeBlockSize).AsVoid())
+        .ThrowOnError();
+    WaitFor(FlushBlocks(sessionId, /*blockIndex*/ 7))
+        .ThrowOnError();
+
+    WaitFor(CancelChunk(sessionId))
+        .ThrowOnError();
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 

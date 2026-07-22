@@ -67,8 +67,8 @@ struct TGpuSchedulingProfilingCounters
     NProfiling::TProfiler PlanUpdateProfiler;
     NProfiling::TProfiler SchedulingHeartbeatProfiler;
 
-    NProfiling::TCounter PlannedAssignments;
-    NProfiling::TCounter PreemptedAssignments;
+    TEnumIndexedArray<EGpuAssignmentPlanningStage, NProfiling::TCounter> PlannedAssignmentsByStage;
+    TEnumIndexedArray<EGpuAssignmentPlanningStage, NProfiling::TCounter> PreemptedAssignmentsByStage;
     NProfiling::TGauge Assignments;
 
     NProfiling::TEventTimer TotalPlanningTime;
@@ -106,7 +106,7 @@ public:
     void RegisterNode(TNodeId nodeId, const std::string& nodeAddress) override;
     void UnregisterNode(TNodeId nodeId) override;
 
-    void ProcessSchedulingHeartbeat(
+    TFuture<void> ProcessSchedulingHeartbeat(
         const ISchedulingHeartbeatContextPtr& schedulingHeartbeatContext,
         const TPoolTreeSnapshotPtr& treeSnapshot,
         bool skipScheduleAllocations) override;
@@ -348,7 +348,7 @@ public:
         const TPoolTreeSnapshotPtr& treeSnapshot,
         const TResourceUsageSnapshotPtr& resourceUsageSnapshot) const override;
 
-    void ProcessSchedulingHeartbeat(
+    TFuture<void> ProcessSchedulingHeartbeat(
         const ISchedulingHeartbeatContextPtr& schedulingHeartbeatContext,
         const TPoolTreeSnapshotPtr& treeSnapshot,
         bool skipScheduleAllocations) override;

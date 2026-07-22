@@ -305,6 +305,13 @@ struct TDynamicDataNodeTrackerConfig
 
     int MaxConcurrentChunkReplicasDuringIncrementalHeartbeat;
 
+    // COMPAT(danilalexeev): YT-23781.
+    int MaxConcurrentFullHeartbeats;
+
+    int MaxConcurrentLocationFullHeartbeats;
+
+    int MaxConcurrentIncrementalHeartbeats;
+
     TDanglingLocationCleanerConfigPtr DanglingLocationCleaner;
 
     // COMPAT(danilalexeev): YT-23781.
@@ -318,6 +325,9 @@ struct TDynamicDataNodeTrackerConfig
     // COMPAT(grphil)
     bool IgnoreReplicasWithChangedStateDuringValidation;
 
+    // COMPAT(cherepashka)
+    bool EnableChunkReplicasThrottlingInHeartbeats;
+
     bool EnableLocationIndexesInDataNodeHeartbeats;
 
     // COMPAT(cherepashka)
@@ -330,6 +340,8 @@ struct TDynamicDataNodeTrackerConfig
     bool CheckLocationConvergenceByIndexAndUuidOnConfirmation;
 
     bool VerifyAllLocationsAreReportedInFullHeartbeats;
+
+    TDuration ExpectedDataNodeHeartbeatDuration;
 
     REGISTER_YSON_STRUCT(TDynamicDataNodeTrackerConfig);
 
@@ -566,6 +578,8 @@ struct TDynamicSequoiaChunkReplicasConfig
     int MaxConcurrentLocationsToRefresh;
     int MaxLocationsAwaitingRefresh;
     int MaxUnsuccessfulLocationRefreshAttempts;
+
+    bool ScheduleChunkSealInSequoiaChunkRefresh;
 
     REGISTER_YSON_STRUCT(TDynamicSequoiaChunkReplicasConfig);
 
@@ -865,6 +879,8 @@ struct TDynamicChunkManagerConfig
 
     // COMPAT(koloshmet)
     bool UpdateHistoricallyNonVitalInUnexport;
+
+    bool AllowOffshoreMedia;
 
     REGISTER_YSON_STRUCT(TDynamicChunkManagerConfig);
 

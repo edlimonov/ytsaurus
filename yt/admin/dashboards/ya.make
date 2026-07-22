@@ -40,7 +40,7 @@ PY_SRCS(
     yt_dashboards/flow/worker.py
     yt_dashboards/http_proxies.py
     yt_dashboards/key_filter.py
-    yt_dashboards/lsm.py
+    yt_dashboards/compaction.py
     yt_dashboards/master.py
     yt_dashboards/cypress_proxies.py
     yt_dashboards/scheduler_gpu.py
@@ -92,3 +92,7 @@ IF (NOT OPENSOURCE)
         yt_dashboards/flow/tests
     )
 ENDIF()
+
+RECURSE_FOR_TESTS(
+    yt_dashboards/tests_os
+)

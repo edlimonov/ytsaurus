@@ -1061,9 +1061,6 @@ struct TControllerAgentConfig
     //! Maximum number of foreign chunks to locate per request.
     int MaxChunksPerLocateRequest;
 
-    //! Enables using tmpfs if tmpfs_path is specified in user spec.
-    bool EnableTmpfs;
-
     //! Enables dynamic change of job sizes.
     bool EnablePartitionMapJobSizeAdjustment;
 
@@ -1351,6 +1348,9 @@ struct TControllerAgentConfig
     NServer::TOperationEventReporterConfigPtr OperationEventsReporter;
 
     bool FailOperationsInEmptyTrees;
+
+    //! If |true|, operations on tables whose primary medium is S3 (offshore) are forbidden.
+    bool ForbidOperationsOnOffshoreMedia;
 
     REGISTER_YSON_STRUCT(TControllerAgentConfig);
 

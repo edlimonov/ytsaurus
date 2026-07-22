@@ -1671,7 +1671,8 @@ def _build_rpc_proxy_configs(multidaemon_config_output,
                 logs_dir,
                 "rpc-proxy-{}".format(index),
                 singletons_config.setdefault("logging", {}),
-                yt_config)
+                yt_config,
+                has_structured_logs=True)
 
         init_jaeger_collector(singletons_config, "rpc_proxy", {"rpc_proxy_index": str(index)})
 
@@ -2094,6 +2095,10 @@ def _build_offshore_data_gateway_configs(yt_config,
         config["rpc_port"] = next(ports_generator)
         config["monitoring_port"] = next(ports_generator)
 
+        multidaemon_config_output["daemons"][f"offshore_data_gateway_{index}"] = {
+            "type": "offshore_data_gateway",
+            "config": config,
+        }
         configs.append(config)
 
     return configs
